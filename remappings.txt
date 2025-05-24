@@ -1,0 +1,3 @@
+@uniswap/v3-core/contracts/=lib/v3-core/contracts/
+@uniswap/v3-periphery/contracts/=lib/v3-periphery/contracts/
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
