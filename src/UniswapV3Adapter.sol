@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FullMath} from "@uniswap/v3-core/contracts/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import {FixedPoint96} from "@uniswap/v3-core/contracts/libraries/FixedPoint96.sol";
@@ -37,6 +39,97 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
         i_factory = IUniswapV3Factory(_factory);
         i_swapRouter = ISwapRouter(_swapRouter);
         i_nonfungiblePositionManager = INonfungiblePositionManager(_nonfungiblePositionManager);
+    }
+
+    /**
+     * @notice Add liquidity to a pool
+     * @param params The parameters for the add liquidity transaction
+     * @notice allows deposit tokens in any order
+     * @notice allows to set prices instead of ticks, prices must be token0 in token 1, in 18 decimals
+     */
+    function addLiquidity(AddLiquidityParams memory params) external returns (uint256 amount0, uint256 amount1) {
+        int24 tickSpacing = IUniswapV3Pool(getPoolAddress(params.token0, params.token1, params.fee)).tickSpacing();
+
+        (address token0, address token1) =
+            params.token0 < params.token1 ? (params.token0, params.token1) : (params.token1, params.token0);
+        (uint128 amount0Desired, uint128 amount1Desired) = params.token0 < params.token1
+            ? (params.amount0Desired, params.amount1Desired)
+            : (params.amount1Desired, params.amount0Desired);
+        (uint128 amount0Min, uint128 amount1Min) = params.token0 < params.token1
+            ? (params.amount0Min, params.amount1Min)
+            : (params.amount1Min, params.amount0Min);
+
+        uint256 token0Decimals = IERC20Metadata(token0).decimals();
+        uint256 token1Decimals = IERC20Metadata(token1).decimals();
+
+        // price = token1 * 10 ** token1Decimals / token0 * 10 ** token0Decimals
+        uint256 priceLowerQ96;
+        uint256 priceUpperQ96;
+        /**
+         * Because token order in params can be any order, we need to handle both cases
+         * params.token0 is token0 and params.token1 is token1
+         * params.token0 is token1 and params.token1 is token0
+         * It defines in which order to multiply the price decimals, and which price is lower and upper in accordance with the token order
+         */
+        if (params.token0 < params.token1) {
+            uint256 priceDecimalsNominator = 10 ** token1Decimals;
+            uint256 priceDecimalsDenominator = (10 ** token0Decimals) * PRICE_PRECISION;
+            priceLowerQ96 =
+                FullMath.mulDiv(params.priceLower * FixedPoint96.Q96, priceDecimalsNominator, priceDecimalsDenominator);
+            priceUpperQ96 =
+                FullMath.mulDiv(params.priceUpper * FixedPoint96.Q96, priceDecimalsNominator, priceDecimalsDenominator);
+        } else {
+            uint256 priceDecimalsNominator = 10 ** token1Decimals * PRICE_PRECISION;
+            uint256 priceDecimalsDenominator = (10 ** token0Decimals);
+            priceUpperQ96 =
+                FullMath.mulDiv(FixedPoint96.Q96, priceDecimalsNominator, params.priceLower * priceDecimalsDenominator);
+            priceLowerQ96 =
+                FullMath.mulDiv(FixedPoint96.Q96, priceDecimalsNominator, params.priceUpper * priceDecimalsDenominator);
+        }
+
+        uint256 priceLowerQ192 = priceLowerQ96 * FixedPoint96.Q96;
+        uint256 priceLowerSqrtX96 = Math.sqrt(priceLowerQ192);
+
+        uint256 priceUpperQ192 = priceUpperQ96 * FixedPoint96.Q96;
+        uint256 priceUpperSqrtX96 = Math.sqrt(priceUpperQ192);
+
+        int24 tickLower = TickMath.getTickAtSqrtRatio(uint160(priceLowerSqrtX96));
+        int24 tickUpper = TickMath.getTickAtSqrtRatio(uint160(priceUpperSqrtX96));
+
+        int24 tickLowerAligned = alignTickToSpacing(tickLower, tickSpacing, false);
+        int24 tickUpperAligned = alignTickToSpacing(tickUpper, tickSpacing, true);
+
+        IERC20(token0).transferFrom(msg.sender, address(this), amount0Desired);
+        IERC20(token1).transferFrom(msg.sender, address(this), amount1Desired);
+
+        IERC20(token0).approve(address(i_nonfungiblePositionManager), amount0Desired);
+        IERC20(token1).approve(address(i_nonfungiblePositionManager), amount1Desired);
+
+        (,, amount0, amount1) = INonfungiblePositionManager(i_nonfungiblePositionManager).mint(
+            INonfungiblePositionManager.MintParams({
+                token0: token0,
+                token1: token1,
+                fee: params.fee,
+                tickLower: tickLowerAligned,
+                tickUpper: tickUpperAligned,
+                amount0Desired: amount0Desired,
+                amount1Desired: amount1Desired,
+                amount0Min: amount0Min,
+                amount1Min: amount1Min,
+                recipient: msg.sender,
+                deadline: params.deadline
+            })
+        );
+
+        if (amount0Desired > amount0) {
+            IERC20(token0).transfer(msg.sender, amount0Desired - amount0);
+        }
+
+        if (amount1Desired > amount1) {
+            IERC20(token1).transfer(msg.sender, amount1Desired - amount1);
+        }
+
+        (amount0, amount1) = params.token0 < params.token1 ? (amount0, amount1) : (amount1, amount0);
     }
 
     /**
@@ -114,6 +207,74 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
             price = FullMath.mulDiv(
                 PRICE_PRECISION * (10 ** tokenInDecimals), FixedPoint96.Q96, priceX96 * (10 ** tokenOutDecimals)
             );
+        }
+    }
+
+    /**
+     * @notice Get the pool info
+     * @param pool The address of the pool
+     * @return fee The fee of the pool
+     * @return token0 The first token of the pool
+     * @return token1 The second token of the pool
+     * @return tick The current tick of the pool
+     * @return sqrtPriceX96 The current sqrt price of the pool
+     */
+    function getPoolInfo(address pool)
+        external
+        view
+        returns (uint24 fee, address token0, address token1, int24 tick, uint160 sqrtPriceX96)
+    {
+        (sqrtPriceX96, tick,,,,,) = IUniswapV3Pool(pool).slot0();
+        fee = IUniswapV3Pool(pool).fee();
+        token0 = IUniswapV3Pool(pool).token0();
+        token1 = IUniswapV3Pool(pool).token1();
+    }
+
+    /**
+     * @notice Get the positions of a user
+     * @param user The address of the user
+     * @return positions The positions of the user
+     */
+    function getUserPositions(address user) external view returns (Position[] memory positions) {
+        uint256 userBalance = INonfungiblePositionManager(i_nonfungiblePositionManager).balanceOf(user);
+
+        address token0;
+        address token1;
+        uint24 fee;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
+
+        positions = new Position[](userBalance);
+
+        for (uint256 i = 0; i < userBalance; i++) {
+            uint256 tokenId = INonfungiblePositionManager(i_nonfungiblePositionManager).tokenOfOwnerByIndex(user, i);
+
+            (,, token0, token1, fee, tickLower, tickUpper, liquidity,,,,) =
+                INonfungiblePositionManager(i_nonfungiblePositionManager).positions(tokenId);
+            positions[i] = Position({
+                token0: token0,
+                token1: token1,
+                fee: fee,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidity: liquidity
+            });
+        }
+    }
+
+    /**
+     * @notice Align a tick to the nearest tick spacing
+     * @param tick The tick to align
+     * @param tickSpacing The tick spacing
+     * @param upper Whether to round up or down
+     * @return alignedTick The aligned tick
+     */
+    function alignTickToSpacing(int24 tick, int24 tickSpacing, bool upper) internal pure returns (int24) {
+        if (upper) {
+            return ((tick + tickSpacing - 1) / tickSpacing) * tickSpacing;
+        } else {
+            return (tick / tickSpacing) * tickSpacing;
         }
     }
 }

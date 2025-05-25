@@ -22,6 +22,9 @@ import {IUniswapV3Adapter} from "../src/interfaces/IUniswapV3Adapter.sol";
  * token0 is USDC, token1 is WETH
  */
 contract UniswapV3AdapterTest is Test {
+    address public user = makeAddr("user");
+
+    uint256 public constant USER_INITIAL_BALANCE = 10_000 ether;
     uint32 private constant TWAP_INTERVAL = 600; // 10 minutes
 
     // Mainnet information
@@ -44,6 +47,10 @@ contract UniswapV3AdapterTest is Test {
         adapter = new UniswapV3Adapter(
             address(factory), address(nonfungiblePositionManager), address(swapRouter), address(quoter)
         );
+
+        vm.deal(user, USER_INITIAL_BALANCE);
+        deal(USDC, user, USER_INITIAL_BALANCE);
+        deal(WETH, user, USER_INITIAL_BALANCE);
     }
 
     function testGetPoolAddress() public view {
@@ -80,7 +87,7 @@ contract UniswapV3AdapterTest is Test {
         // testing block prices
         // price returned initially in 12 decimals
         uint256 priceOfUsdcInWeth = FullMath.mulDiv(sqrtPriceX96, sqrtPriceX96, 1 << 192) * 1e6; // 390606358000000 = 0.000390606358 WETH
-        uint256 priceOfWethInUsdc = 1e18 * 1e18 / priceOfUsdcInWeth; //2560122178041966229336 = 2560.122178041966229336 USDC
+        uint256 priceOfWethInUsdc = (1e18 * 1e18) / priceOfUsdcInWeth; //2560122178041966229336 = 2560.122178041966229336 USDC
         assertEq(priceOfUsdcInWeth, 0.000390606358 * 1e18);
         assertEq(priceOfWethInUsdc, 2560.122178041966229336 * 1e18);
 
@@ -90,5 +97,274 @@ contract UniswapV3AdapterTest is Test {
         // compare firsts digits, as last digits can be different due to precision loss
         assertEq(priceOfUsdcInWethAdapter / 1e10, priceOfUsdcInWeth / 1e10);
         assertEq(priceOfWethInUsdcAdapter / 1e14, priceOfWethInUsdc / 1e14);
+    }
+
+    function testGetPoolInfo() public view {
+        (uint160 sqrtPriceX96Real, int24 tickReal,,,,,) = IUniswapV3Pool(USDC_WETH_500_POOL).slot0();
+
+        (uint24 fee, address token0, address token1, int24 tick, uint160 sqrtPriceX96) =
+            adapter.getPoolInfo(USDC_WETH_500_POOL);
+        assertEq(fee, USDC_WETH_FEE);
+        assertEq(token0, USDC);
+        assertEq(token1, WETH);
+        assertEq(tick, tickReal);
+        assertEq(sqrtPriceX96, sqrtPriceX96Real);
+    }
+
+    function testGetUserPositions() public {
+        IUniswapV3Adapter.Position[] memory positions = adapter.getUserPositions(user);
+        assertEq(positions.length, 0);
+
+        vm.startPrank(user);
+        IERC20(USDC).approve(address(nonfungiblePositionManager), 2 * 1e6);
+        IERC20(WETH).approve(address(nonfungiblePositionManager), 2 * 1e18);
+        INonfungiblePositionManager(nonfungiblePositionManager).mint(
+            INonfungiblePositionManager.MintParams({
+                token0: USDC,
+                token1: WETH,
+                fee: USDC_WETH_FEE,
+                tickLower: -887240,
+                tickUpper: 887240,
+                amount0Desired: 1e6,
+                amount1Desired: 1e18,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: user,
+                deadline: block.timestamp + 1000
+            })
+        );
+        INonfungiblePositionManager(nonfungiblePositionManager).mint(
+            INonfungiblePositionManager.MintParams({
+                token0: USDC,
+                token1: WETH,
+                fee: USDC_WETH_FEE,
+                tickLower: -887240,
+                tickUpper: 887240,
+                amount0Desired: 1e6,
+                amount1Desired: 1e18,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: user,
+                deadline: block.timestamp + 1000
+            })
+        );
+        vm.stopPrank();
+
+        uint256 userBalance = INonfungiblePositionManager(nonfungiblePositionManager).balanceOf(user);
+        assertEq(userBalance, 2);
+
+        IUniswapV3Adapter.Position[] memory positionsAfter = adapter.getUserPositions(user);
+        assertEq(positionsAfter.length, 2);
+        assertEq(positionsAfter[0].token0, USDC);
+        assertEq(positionsAfter[0].token1, WETH);
+        assertEq(positionsAfter[0].fee, USDC_WETH_FEE);
+        assertEq(positionsAfter[0].tickLower, -887240);
+        assertEq(positionsAfter[0].tickUpper, 887240);
+
+        assertEq(positionsAfter[1].token0, USDC);
+        assertEq(positionsAfter[1].token1, WETH);
+        assertEq(positionsAfter[1].fee, USDC_WETH_FEE);
+        assertEq(positionsAfter[1].tickLower, -887240);
+        assertEq(positionsAfter[1].tickUpper, 887240);
+    }
+
+    // price = token1 * 10 ** token1Decimals / token0 * 10 ** token0Decimals
+    function testAddLiquidityInReverseOrderPrices() public {
+        uint256 amountWETH = 1e18;
+        uint256 amountUSDC = 1000e6;
+
+        uint256 priceLowerToProvide = 2300 * 1e18;
+        uint256 priceUpperToProvide = 2600 * 1e18;
+
+        // test check by same price ticks and amounts in
+        // ADAPTER deposit
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(adapter), amountWETH);
+        IERC20(USDC).approve(address(adapter), amountUSDC);
+
+        (uint256 amount0, uint256 amount1) = adapter.addLiquidity(
+            IUniswapV3Adapter.AddLiquidityParams({
+                token0: WETH,
+                token1: USDC,
+                fee: USDC_WETH_FEE,
+                priceLower: priceLowerToProvide,
+                priceUpper: priceUpperToProvide,
+                amount0Desired: uint128(amountWETH),
+                amount1Desired: uint128(amountUSDC),
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000
+            })
+        );
+
+        IUniswapV3Adapter.Position[] memory positions = adapter.getUserPositions(user);
+        assertEq(positions.length, 1);
+
+        int24 tickLower = positions[0].tickLower; //197680
+        int24 tickUpper = positions[0].tickUpper; //198920
+        assertEq(tickLower, 197680);
+        assertEq(tickUpper, 198920);
+
+        uint160 sqrtPriceX96Lower = TickMath.getSqrtRatioAtTick(tickLower);
+        uint160 sqrtPriceX96Upper = TickMath.getSqrtRatioAtTick(tickUpper);
+
+        uint256 priceOfUsdcInWethLower = FullMath.mulDiv(sqrtPriceX96Lower, sqrtPriceX96Lower, 1 << 192) * 1e6; // 384329826000000 = 0.000384329826 WETH
+        uint256 priceOfWethInUsdcLower = (1e18 * 1e18) / priceOfUsdcInWethLower; // 2601931810517354955428 = 2601.931810517354955428 USDC
+
+        uint256 priceOfUsdcInWethUpper = FullMath.mulDiv(sqrtPriceX96Upper, sqrtPriceX96Upper, 1 << 192) * 1e6; // 435064766000000 = 0.000435064766 WETH
+        uint256 priceOfWethInUsdcUpper = (1e18 * 1e18) / priceOfUsdcInWethUpper; // 2298508355880053040194 = 2298.508355880053040194 USDC
+
+        assertApproxEqRel(priceLowerToProvide, priceOfWethInUsdcUpper, 1e18 * 5 / 100);
+        assertApproxEqRel(priceUpperToProvide, priceOfWethInUsdcLower, 1e18 * 5 / 100);
+
+        console.log("priceOfUsdcInWethLower", priceOfUsdcInWethLower);
+        console.log("priceOfWethInUsdcLower", priceOfWethInUsdcLower);
+        console.log("priceOfUsdcInWethUpper", priceOfUsdcInWethUpper);
+        console.log("priceOfWethInUsdcUpper", priceOfWethInUsdcUpper);
+
+        vm.stopPrank();
+
+        console.log("amount0", amount0); // 63890307123541149 = 0.063890307123541149 WETH
+        console.log("amount1", amount1); // 1000000000 = 1000.000000 usdc
+
+        // UNISWAP deposit
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(nonfungiblePositionManager), amountWETH);
+        IERC20(USDC).approve(address(nonfungiblePositionManager), amountUSDC);
+        (, uint128 liquidityUniswap, uint256 amount0Uniswap, uint256 amount1Uniswap) = INonfungiblePositionManager(
+            nonfungiblePositionManager
+        ).mint(
+            INonfungiblePositionManager.MintParams({
+                token0: USDC,
+                token1: WETH,
+                fee: USDC_WETH_FEE,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                amount0Desired: uint128(amountUSDC),
+                amount1Desired: uint128(amountWETH),
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: user,
+                deadline: block.timestamp + 1000
+            })
+        );
+
+        IUniswapV3Adapter.Position[] memory positionsAfterUniswap = adapter.getUserPositions(user);
+        assertEq(positionsAfterUniswap.length, 2);
+
+        int24 tickLowerUniswap = positionsAfterUniswap[1].tickLower;
+        int24 tickUpperUniswap = positionsAfterUniswap[1].tickUpper;
+        uint256 liquidityUniswapFromPosition1 = positionsAfterUniswap[1].liquidity;
+        uint256 liquidityUniswapFromPosition0 = positionsAfterUniswap[0].liquidity;
+        assertEq(tickLowerUniswap, 197680);
+        assertEq(tickUpperUniswap, 198920);
+
+        // adapter and uniswap deposit in different order, but same amount
+        // if amounts and liquidity are equal, it means adapter works correctly
+        assertEq(amount0Uniswap, amount1);
+        assertEq(amount1Uniswap, amount0);
+        assertEq(liquidityUniswapFromPosition1, liquidityUniswapFromPosition0);
+        assertEq(liquidityUniswap, liquidityUniswapFromPosition1);
+
+        vm.stopPrank();
+    }
+
+    function testAddLiquidityInCorrectOrderPrices() public {
+        uint256 amountWETH = 1e18;
+        uint256 amountUSDC = 1000e6;
+
+        uint256 priceLowerToProvide = 0.000384 * 1e18;
+        uint256 priceUpperToProvide = 0.000435 * 1e18;
+
+        // test check by same price ticks and amounts in
+        // ADAPTER deposit
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(adapter), amountWETH);
+        IERC20(USDC).approve(address(adapter), amountUSDC);
+
+        (uint256 amount0, uint256 amount1) = adapter.addLiquidity(
+            IUniswapV3Adapter.AddLiquidityParams({
+                token0: USDC,
+                token1: WETH,
+                fee: USDC_WETH_FEE,
+                priceLower: priceLowerToProvide,
+                priceUpper: priceUpperToProvide,
+                amount0Desired: uint128(amountUSDC),
+                amount1Desired: uint128(amountWETH),
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000
+            })
+        );
+
+        IUniswapV3Adapter.Position[] memory positions = adapter.getUserPositions(user);
+        assertEq(positions.length, 1);
+
+        int24 tickLower = positions[0].tickLower; //197670
+        int24 tickUpper = positions[0].tickUpper; //198920
+        assertEq(tickLower, 197670);
+        assertEq(tickUpper, 198920);
+
+        uint160 sqrtPriceX96Lower = TickMath.getSqrtRatioAtTick(tickLower);
+        uint160 sqrtPriceX96Upper = TickMath.getSqrtRatioAtTick(tickUpper);
+
+        uint256 priceOfUsdcInWethLower = FullMath.mulDiv(sqrtPriceX96Lower, sqrtPriceX96Lower, 1 << 192) * 1e6; // 383945708000000 = 0.0003839457 WETH
+        uint256 priceOfWethInUsdcLower = (1e18 * 1e18) / priceOfUsdcInWethLower; // 2604534909920128603182 = 2604.534909920128603182 USDC
+
+        uint256 priceOfUsdcInWethUpper = FullMath.mulDiv(sqrtPriceX96Upper, sqrtPriceX96Upper, 1 << 192) * 1e6; // 435064766000000 = 0.000435064766 WETH
+        uint256 priceOfWethInUsdcUpper = (1e18 * 1e18) / priceOfUsdcInWethUpper; // 2298508355880053040194 = 2298.508355880053040194 USDC
+
+        assertApproxEqRel(priceLowerToProvide, priceOfUsdcInWethLower, 1e18 * 5 / 100);
+        assertApproxEqRel(priceUpperToProvide, priceOfUsdcInWethUpper, 1e18 * 5 / 100);
+
+        console.log("priceOfUsdcInWethLower", priceOfUsdcInWethLower);
+        console.log("priceOfWethInUsdcLower", priceOfWethInUsdcLower);
+        console.log("priceOfUsdcInWethUpper", priceOfUsdcInWethUpper);
+        console.log("priceOfWethInUsdcUpper", priceOfWethInUsdcUpper);
+
+        vm.stopPrank();
+
+        // UNISWAP deposit
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(nonfungiblePositionManager), amountWETH);
+        IERC20(USDC).approve(address(nonfungiblePositionManager), amountUSDC);
+        (, uint128 liquidityUniswap, uint256 amount0Uniswap, uint256 amount1Uniswap) = INonfungiblePositionManager(
+            nonfungiblePositionManager
+        ).mint(
+            INonfungiblePositionManager.MintParams({
+                token0: USDC,
+                token1: WETH,
+                fee: USDC_WETH_FEE,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                amount0Desired: uint128(amountUSDC),
+                amount1Desired: uint128(amountWETH),
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: user,
+                deadline: block.timestamp + 1000
+            })
+        );
+
+        IUniswapV3Adapter.Position[] memory positionsAfterUniswap = adapter.getUserPositions(user);
+        assertEq(positionsAfterUniswap.length, 2);
+
+        int24 tickLowerUniswap = positionsAfterUniswap[1].tickLower;
+        int24 tickUpperUniswap = positionsAfterUniswap[1].tickUpper;
+        uint256 liquidityUniswapFromPosition1 = positionsAfterUniswap[1].liquidity;
+        uint256 liquidityUniswapFromPosition0 = positionsAfterUniswap[0].liquidity;
+        assertEq(tickLowerUniswap, 197670);
+        assertEq(tickUpperUniswap, 198920);
+
+        // adapter and uniswap deposit in correct order, and same amount
+        // if amounts and liquidity are equal, it means adapter works correctly
+        assertEq(amount0Uniswap, amount0);
+        assertEq(amount1Uniswap, amount1);
+        assertEq(liquidityUniswapFromPosition1, liquidityUniswapFromPosition0);
+        assertEq(liquidityUniswap, liquidityUniswapFromPosition1);
+
+        vm.stopPrank();
     }
 }
