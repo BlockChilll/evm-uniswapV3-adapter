@@ -7,4 +7,6 @@ interface IUniswapV3Adapter {
     function getExpectedAmountOut(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee)
         external
         returns (uint256);
+
+    function getPrice(address tokenIn, address tokenOut, uint24 fee) external view returns (uint256 price);
 }
