@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {TickMath} from "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import {FullMath} from "@uniswap/v3-core/contracts/libraries/FullMath.sol";
 import {FixedPoint96} from "@uniswap/v3-core/contracts/libraries/FixedPoint96.sol";
@@ -366,5 +367,214 @@ contract UniswapV3AdapterTest is Test {
         assertEq(liquidityUniswap, liquidityUniswapFromPosition1);
 
         vm.stopPrank();
+    }
+
+    function testIncreaseLiquidity() public {
+        uint256 amountWETH = 1e18;
+        uint256 amountUSDC = 1000e6;
+
+        uint256 priceLowerToProvide = 2300 * 1e18;
+        uint256 priceUpperToProvide = 2600 * 1e18;
+
+        // test check by same price ticks and amounts in
+        // ADAPTER deposit
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(adapter), amountWETH);
+        IERC20(USDC).approve(address(adapter), amountUSDC);
+
+        (uint256 amount0, uint256 amount1) = adapter.addLiquidity(
+            IUniswapV3Adapter.AddLiquidityParams({
+                token0: WETH,
+                token1: USDC,
+                fee: USDC_WETH_FEE,
+                priceLower: priceLowerToProvide,
+                priceUpper: priceUpperToProvide,
+                amount0Desired: uint128(amountWETH),
+                amount1Desired: uint128(amountUSDC),
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000
+            })
+        );
+        vm.stopPrank();
+
+        console.log("amount0", amount0); // 63890307123541149
+        console.log("amount1", amount1); // 100000000
+
+        IUniswapV3Adapter.Position[] memory positions = adapter.getUserPositions(user);
+        assertEq(positions.length, 1);
+
+        uint256 tokenId = positions[0].tokenId;
+        uint256 liquidity = positions[0].liquidity;
+
+        console.log("liquidity", liquidity); // 379870304494519
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(adapter), amount0);
+        IERC20(USDC).approve(address(adapter), amount1);
+
+        (uint256 amount0AfterAddLiquidity, uint256 amount1AfterAddLiquidity) = adapter.increaseLiquidity(
+            IUniswapV3Adapter.IncreaseLiquidityParams({
+                tokenId: tokenId,
+                amount0Desired: amount0,
+                amount1Desired: amount1,
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000,
+                token0: WETH,
+                token1: USDC
+            })
+        );
+        vm.stopPrank();
+
+        IUniswapV3Adapter.Position[] memory positionsAfterIncreaseLiquidity = adapter.getUserPositions(user);
+        assertEq(positionsAfterIncreaseLiquidity.length, 1);
+
+        uint256 liquidityAfterIncreaseLiquidity = positionsAfterIncreaseLiquidity[0].liquidity;
+        console.log("liquidityAfterIncreaseLiquidity", liquidityAfterIncreaseLiquidity); // 759740608989038
+
+        console.log("amount0AfterAddLiquidity", amount0AfterAddLiquidity); // 63890307123541149
+        console.log("amount1AfterAddLiquidity", amount1AfterAddLiquidity); // 1000000000
+
+        assertEq(amount0AfterAddLiquidity, amount0);
+        assertEq(amount1AfterAddLiquidity, amount1);
+        assertEq(liquidityAfterIncreaseLiquidity, 2 * liquidity);
+    }
+
+    function testDecreaseLiquidity() public {
+        uint256 amountWETH = 1e18;
+        uint256 amountUSDC = 1000e6;
+
+        uint256 priceLowerToProvide = 2300 * 1e18;
+        uint256 priceUpperToProvide = 2600 * 1e18;
+
+        // test check by same price ticks and amounts in
+        // ADAPTER deposit
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(adapter), amountWETH);
+        IERC20(USDC).approve(address(adapter), amountUSDC);
+
+        (uint256 amount0, uint256 amount1) = adapter.addLiquidity(
+            IUniswapV3Adapter.AddLiquidityParams({
+                token0: WETH,
+                token1: USDC,
+                fee: USDC_WETH_FEE,
+                priceLower: priceLowerToProvide,
+                priceUpper: priceUpperToProvide,
+                amount0Desired: uint128(amountWETH),
+                amount1Desired: uint128(amountUSDC),
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000
+            })
+        );
+        vm.stopPrank();
+
+        console.log("amount0", amount0); // 63890307123541149
+        console.log("amount1", amount1); // 100000000
+
+        IUniswapV3Adapter.Position[] memory positions = adapter.getUserPositions(user);
+        assertEq(positions.length, 1);
+
+        uint256 tokenId = positions[0].tokenId;
+        uint256 liquidity = positions[0].liquidity;
+
+        vm.startPrank(user);
+        IERC721(nonfungiblePositionManager).approve(address(adapter), tokenId);
+        (uint256 amount0Decreased, uint256 amount1Decreased) = adapter.decreaseLiquidity(
+            IUniswapV3Adapter.DecreaseLiquidityParams({
+                tokenId: tokenId,
+                liquidity: uint128(liquidity),
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000,
+                token0: WETH,
+                token1: USDC
+            })
+        );
+        vm.stopPrank();
+
+        console.log("amount0Decreased", amount0Decreased); // 63890307123541148
+        console.log("amount1Decreased", amount1Decreased); // 999999999
+
+        IUniswapV3Adapter.Position[] memory positionsAfterDecreaseLiquidity = adapter.getUserPositions(user);
+        assertEq(positionsAfterDecreaseLiquidity.length, 1);
+
+        uint256 liquidityAfterDecreaseLiquidity = positionsAfterDecreaseLiquidity[0].liquidity;
+        console.log("liquidityAfterDecreaseLiquidity", liquidityAfterDecreaseLiquidity);
+
+        assertEq(liquidityAfterDecreaseLiquidity, 0);
+        assertApproxEqRel(amount0Decreased, amount0, 1e18 * 1 / 100);
+        assertApproxEqRel(amount1Decreased, amount1, 1e18 * 1 / 100);
+    }
+
+    function testCollect() public {
+        uint256 amountWETH = 1e18;
+        uint256 amountUSDC = 1000e6;
+
+        uint256 priceLowerToProvide = 2300 * 1e18;
+        uint256 priceUpperToProvide = 2600 * 1e18;
+
+        // test check by same price ticks and amounts in
+        // ADAPTER deposit
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(adapter), amountWETH);
+        IERC20(USDC).approve(address(adapter), amountUSDC);
+
+        (uint256 amount0, uint256 amount1) = adapter.addLiquidity(
+            IUniswapV3Adapter.AddLiquidityParams({
+                token0: WETH,
+                token1: USDC,
+                fee: USDC_WETH_FEE,
+                priceLower: priceLowerToProvide,
+                priceUpper: priceUpperToProvide,
+                amount0Desired: uint128(amountWETH),
+                amount1Desired: uint128(amountUSDC),
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000
+            })
+        );
+
+        IUniswapV3Adapter.Position[] memory positions = adapter.getUserPositions(user);
+        assertEq(positions.length, 1);
+
+        uint256 tokenId = positions[0].tokenId;
+        uint256 liquidity = positions[0].liquidity;
+
+        IERC721(nonfungiblePositionManager).approve(address(adapter), tokenId);
+        adapter.decreaseLiquidity(
+            IUniswapV3Adapter.DecreaseLiquidityParams({
+                tokenId: tokenId,
+                liquidity: uint128(liquidity),
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp + 1000,
+                token0: WETH,
+                token1: USDC
+            })
+        );
+
+        (uint256 amount0Collected, uint256 amount1Collected) = adapter.collect(
+            IUniswapV3Adapter.CollectParams({
+                tokenId: tokenId,
+                recipient: user,
+                amount0Max: uint128(amount0),
+                amount1Max: uint128(amount1),
+                token0: WETH,
+                token1: USDC
+            })
+        );
+
+        vm.stopPrank();
+
+        console.log("amount0Collected", amount0Collected); // 63890307123541148
+        console.log("amount1Collected", amount1Collected); // 999999999
+
+        assertApproxEqRel(amount0Collected, amount0, 1e18 * 1 / 100);
+        assertApproxEqRel(amount1Collected, amount1, 1e18 * 1 / 100);
     }
 }

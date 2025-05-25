@@ -133,6 +133,107 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
     }
 
     /**
+     * @notice Increase liquidity to a position
+     * @param params The parameters for the increase liquidity transaction
+     * @notice allows increase liquidity in any order
+     * Amount order is defined by token0 and token1 order in params
+     */
+    function increaseLiquidity(IncreaseLiquidityParams memory params)
+        external
+        returns (uint256 amount0, uint256 amount1)
+    {
+        (address token0, address token1) =
+            params.token0 < params.token1 ? (params.token0, params.token1) : (params.token1, params.token0);
+        (uint256 amount0Desired, uint256 amount1Desired) = params.token0 < params.token1
+            ? (params.amount0Desired, params.amount1Desired)
+            : (params.amount1Desired, params.amount0Desired);
+        (uint256 amount0Min, uint256 amount1Min) = params.token0 < params.token1
+            ? (params.amount0Min, params.amount1Min)
+            : (params.amount1Min, params.amount0Min);
+
+        IERC20(token0).transferFrom(msg.sender, address(this), amount0Desired);
+        IERC20(token1).transferFrom(msg.sender, address(this), amount1Desired);
+
+        IERC20(token0).approve(address(i_nonfungiblePositionManager), amount0Desired);
+        IERC20(token1).approve(address(i_nonfungiblePositionManager), amount1Desired);
+
+        (, amount0, amount1) = INonfungiblePositionManager(i_nonfungiblePositionManager).increaseLiquidity(
+            INonfungiblePositionManager.IncreaseLiquidityParams({
+                tokenId: params.tokenId,
+                amount0Desired: amount0Desired,
+                amount1Desired: amount1Desired,
+                amount0Min: amount0Min,
+                amount1Min: amount1Min,
+                deadline: params.deadline
+            })
+        );
+
+        if (amount0Desired > amount0) {
+            IERC20(token0).transfer(msg.sender, amount0Desired - amount0);
+        }
+
+        if (amount1Desired > amount1) {
+            IERC20(token1).transfer(msg.sender, amount1Desired - amount1);
+        }
+
+        (amount0, amount1) = params.token0 < params.token1 ? (amount0, amount1) : (amount1, amount0);
+    }
+
+    /**
+     * @notice Decrease liquidity from a position
+     * @param params The parameters for the decrease liquidity transaction
+     * @notice allows decrease liquidity in any order
+     * Amount min order is defined by token0 and token1 order in params
+     * @notice position tokenId should be approved to spend by current contract from msg.sender
+     */
+    function decreaseLiquidity(DecreaseLiquidityParams memory params)
+        external
+        returns (uint256 amount0, uint256 amount1)
+    {
+        (uint256 amount0Min, uint256 amount1Min) = params.token0 < params.token1
+            ? (params.amount0Min, params.amount1Min)
+            : (params.amount1Min, params.amount0Min);
+
+        (amount0, amount1) = INonfungiblePositionManager(i_nonfungiblePositionManager).decreaseLiquidity(
+            INonfungiblePositionManager.DecreaseLiquidityParams({
+                tokenId: params.tokenId,
+                liquidity: params.liquidity,
+                amount0Min: amount0Min,
+                amount1Min: amount1Min,
+                deadline: params.deadline
+            })
+        );
+
+        (amount0, amount1) = params.token0 < params.token1 ? (amount0, amount1) : (amount1, amount0);
+    }
+
+    /**
+     * @notice Collect fees from a position
+     * @param params The parameters for the collect transaction
+     * @notice allows collect fees in any order
+     * Amount max order is defined by token0 and token1 order in params
+     * @notice position tokenId should be approved to spend by current contract from msg.sender
+     * @return amount0 The amount collected in token0
+     * @return amount1 The amount collected in token1
+     */
+    function collect(CollectParams memory params) external returns (uint256 amount0, uint256 amount1) {
+        (uint128 amount0Max, uint128 amount1Max) = params.token0 < params.token1
+            ? (params.amount0Max, params.amount1Max)
+            : (params.amount1Max, params.amount0Max);
+
+        (amount0, amount1) = INonfungiblePositionManager(i_nonfungiblePositionManager).collect(
+            INonfungiblePositionManager.CollectParams({
+                tokenId: params.tokenId,
+                recipient: msg.sender,
+                amount0Max: amount0Max,
+                amount1Max: amount1Max
+            })
+        );
+
+        (amount0, amount1) = params.token0 < params.token1 ? (amount0, amount1) : (amount1, amount0);
+    }
+
+    /**
      * @notice Get the pool address for a given pair of tokens and fee
      * @param tokenA The first token of the pair
      * @param tokenB The second token of the pair
@@ -258,7 +359,8 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
                 fee: fee,
                 tickLower: tickLower,
                 tickUpper: tickUpper,
-                liquidity: liquidity
+                liquidity: liquidity,
+                tokenId: tokenId
             });
         }
     }

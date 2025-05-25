@@ -9,6 +9,7 @@ interface IUniswapV3Adapter {
         int24 tickLower;
         int24 tickUpper;
         uint128 liquidity;
+        uint256 tokenId;
     }
 
     /**
@@ -34,6 +35,63 @@ interface IUniswapV3Adapter {
         uint128 amount0Min;
         uint128 amount1Min;
         uint256 deadline;
+    }
+    /**
+     * @param tokenId The ID of the token for which liquidity is being increased
+     * @param amount0Desired The desired amount of token0 to be spent
+     * @param amount1Desired The desired amount of token1 to be spent
+     * @param amount0Min The minimum amount of token0 to spend
+     * @param amount1Min The minimum amount of token1 to spend
+     * @param deadline The deadline for the transaction
+     * @param token0 The first token of the pair
+     * @param token1 The second token of the pair
+     */
+
+    struct IncreaseLiquidityParams {
+        uint256 tokenId;
+        uint256 amount0Desired;
+        uint256 amount1Desired;
+        uint256 amount0Min;
+        uint256 amount1Min;
+        uint256 deadline;
+        address token0;
+        address token1;
+    }
+
+    /**
+     * @param tokenId The ID of the token for which liquidity is being decreased
+     * @param liquidity The amount of liquidity to decrease
+     * @param amount0Min The minimum amount of token0 to spend
+     * @param amount1Min The minimum amount of token1 to spend
+     * @param deadline The deadline for the transaction
+     * @param token0 The first token of the pair
+     * @param token1 The second token of the pair
+     */
+    struct DecreaseLiquidityParams {
+        uint256 tokenId;
+        uint128 liquidity;
+        uint256 amount0Min;
+        uint256 amount1Min;
+        uint256 deadline;
+        address token0;
+        address token1;
+    }
+
+    /**
+     * @param tokenId The ID of the token for which tokens are being collected
+     * @param recipient The account that should receive the tokens
+     * @param amount0Max The maximum amount of token0 to collect
+     * @param amount1Max The maximum amount of token1 to collect
+     * @param token0 The first token of the pair
+     * @param token1 The second token of the pair
+     */
+    struct CollectParams {
+        uint256 tokenId;
+        address recipient;
+        uint128 amount0Max;
+        uint128 amount1Max;
+        address token0;
+        address token1;
     }
 
     /**
@@ -88,4 +146,29 @@ interface IUniswapV3Adapter {
      * @return amount1 The amount of token1 added
      */
     function addLiquidity(AddLiquidityParams memory params) external returns (uint256 amount0, uint256 amount1);
+
+    /**
+     * @param params The parameters for the increase liquidity transaction
+     * @return amount0 The amount of token0 added
+     * @return amount1 The amount of token1 added
+     */
+    function increaseLiquidity(IncreaseLiquidityParams memory params)
+        external
+        returns (uint256 amount0, uint256 amount1);
+
+    /**
+     * @param params The parameters for the decrease liquidity transaction
+     * @return amount0 The amount of token0 removed
+     * @return amount1 The amount of token1 removed
+     */
+    function decreaseLiquidity(DecreaseLiquidityParams memory params)
+        external
+        returns (uint256 amount0, uint256 amount1);
+
+    /**
+     * @param params The parameters for the collect transaction
+     * @return amount0 The amount of token0 collected
+     * @return amount1 The amount of token1 collected
+     */
+    function collect(CollectParams memory params) external returns (uint256 amount0, uint256 amount1);
 }
