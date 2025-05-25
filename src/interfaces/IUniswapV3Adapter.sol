@@ -95,6 +95,26 @@ interface IUniswapV3Adapter {
     }
 
     /**
+     * @param tokenIn The token to swap from
+     * @param tokenOut The token to swap to
+     * @param fee The fee of the pool
+     * @param recipient The account that should receive the tokens
+     * @param deadline The deadline for the transaction
+     * @param amountIn The amount of tokenIn to swap
+     * @param amountOutMinimum The minimum amount of tokenOut to receive
+     * @param sqrtPriceLimitX96 The limit on the price of the tokenIn
+     */
+    struct SwapSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    /**
      * @param tokenA The first token of the pair
      * @param tokenB The second token of the pair
      * @param fee The fee of the pool
@@ -171,4 +191,10 @@ interface IUniswapV3Adapter {
      * @return amount1 The amount of token1 collected
      */
     function collect(CollectParams memory params) external returns (uint256 amount0, uint256 amount1);
+
+    /**
+     * @param params The parameters for the swap single transaction
+     * @return amountOut The amount of the received token
+     */
+    function swapSingle(SwapSingleParams memory params) external returns (uint256 amountOut);
 }

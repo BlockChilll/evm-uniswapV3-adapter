@@ -4,6 +4,8 @@ out = "out"
 libs = ["lib"]
 solc_version = "0.8.24"
 via_ir = true
+opt = true
+optimizer_runs = 200
 
 rpc_endpoints = { evm = "https://eth.llamarpc.com" }
 

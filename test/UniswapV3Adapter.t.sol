@@ -577,4 +577,33 @@ contract UniswapV3AdapterTest is Test {
         assertApproxEqRel(amount0Collected, amount0, 1e18 * 1 / 100);
         assertApproxEqRel(amount1Collected, amount1, 1e18 * 1 / 100);
     }
+
+    function testSwapSingle() public {
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(adapter), 1e18);
+
+        (uint160 sqrtPriceX96,,,,,,) = IUniswapV3Pool(USDC_WETH_500_POOL).slot0();
+
+        uint256 priceOfUsdcInWeth = FullMath.mulDiv(sqrtPriceX96, sqrtPriceX96, 1 << 192) * 1e6; // 390606358000000 = 0.000390606358 WETH
+        uint256 priceOfWethInUsdc = (1e18 * 1e18) / priceOfUsdcInWeth; //2557854767722730466685 = 2557.854767722730466685 USDC
+        console.log("priceOfUsdcInWeth", priceOfUsdcInWeth);
+        console.log("priceOfWethInUsdc", priceOfWethInUsdc);
+
+        uint256 amountOut = adapter.swapSingle(
+            IUniswapV3Adapter.SwapSingleParams({
+                tokenIn: WETH,
+                tokenOut: USDC,
+                fee: USDC_WETH_FEE,
+                recipient: user,
+                deadline: block.timestamp + 1000,
+                amountIn: 1e18,
+                amountOutMinimum: 0
+            })
+        );
+        vm.stopPrank();
+
+        console.log("amountOut", amountOut); // 2556548382 = 2556.548382 USDC
+
+        assertApproxEqRel(amountOut, priceOfWethInUsdc / 1e12, 1e18 * 1 / 100);
+    }
 }

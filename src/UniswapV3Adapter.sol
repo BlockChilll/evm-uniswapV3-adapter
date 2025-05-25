@@ -5,7 +5,6 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FullMath} from "@uniswap/v3-core/contracts/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v3-core/contracts/libraries/TickMath.sol";
-import {FixedPoint96} from "@uniswap/v3-core/contracts/libraries/FixedPoint96.sol";
 import {IQuoterV2} from "@uniswap/v3-periphery/contracts/interfaces/IQuoterV2.sol";
 import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
@@ -27,7 +26,7 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
 
     uint256 private constant PRICE_PRECISION = 10 ** 18;
     uint32 private constant TWAP_INTERVAL = 600; // 10 minutes
-    uint224 private constant SLIPPAGE_MAX = 10_000; // 10,000 basis points = 100%
+    uint256 private constant Q96 = 0x1000000000000000000000000;
 
     IQuoterV2 public immutable i_quoter;
     ISwapRouter public immutable i_swapRouter;
@@ -75,22 +74,22 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
             uint256 priceDecimalsNominator = 10 ** token1Decimals;
             uint256 priceDecimalsDenominator = (10 ** token0Decimals) * PRICE_PRECISION;
             priceLowerQ96 =
-                FullMath.mulDiv(params.priceLower * FixedPoint96.Q96, priceDecimalsNominator, priceDecimalsDenominator);
+                FullMath.mulDiv(params.priceLower * Q96, priceDecimalsNominator, priceDecimalsDenominator);
             priceUpperQ96 =
-                FullMath.mulDiv(params.priceUpper * FixedPoint96.Q96, priceDecimalsNominator, priceDecimalsDenominator);
+                FullMath.mulDiv(params.priceUpper * Q96, priceDecimalsNominator, priceDecimalsDenominator);
         } else {
             uint256 priceDecimalsNominator = 10 ** token1Decimals * PRICE_PRECISION;
             uint256 priceDecimalsDenominator = (10 ** token0Decimals);
             priceUpperQ96 =
-                FullMath.mulDiv(FixedPoint96.Q96, priceDecimalsNominator, params.priceLower * priceDecimalsDenominator);
+                FullMath.mulDiv(Q96, priceDecimalsNominator, params.priceLower * priceDecimalsDenominator);
             priceLowerQ96 =
-                FullMath.mulDiv(FixedPoint96.Q96, priceDecimalsNominator, params.priceUpper * priceDecimalsDenominator);
+                FullMath.mulDiv(Q96, priceDecimalsNominator, params.priceUpper * priceDecimalsDenominator);
         }
 
-        uint256 priceLowerQ192 = priceLowerQ96 * FixedPoint96.Q96;
+        uint256 priceLowerQ192 = priceLowerQ96 * Q96;
         uint256 priceLowerSqrtX96 = Math.sqrt(priceLowerQ192);
 
-        uint256 priceUpperQ192 = priceUpperQ96 * FixedPoint96.Q96;
+        uint256 priceUpperQ192 = priceUpperQ96 * Q96;
         uint256 priceUpperSqrtX96 = Math.sqrt(priceUpperQ192);
 
         int24 tickLower = TickMath.getTickAtSqrtRatio(uint160(priceLowerSqrtX96));
@@ -234,6 +233,32 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
     }
 
     /**
+     * @notice Swap a single token for another token
+     * @param params The parameters for the swap
+     * @return amountOut The amount of the received token
+     * @notice sender should approve the amount of tokenIn to this contract
+     */
+    function swapSingle(SwapSingleParams memory params) external returns (uint256 amountOut) {
+        IERC20(params.tokenIn).transferFrom(msg.sender, address(this), params.amountIn);
+        IERC20(params.tokenIn).approve(address(i_swapRouter), params.amountIn);
+
+        amountOut = i_swapRouter.exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: params.tokenIn,
+                tokenOut: params.tokenOut,
+                fee: params.fee,
+                recipient: params.recipient,
+                deadline: params.deadline,
+                amountIn: params.amountIn,
+                amountOutMinimum: params.amountOutMinimum,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    /// Getters
+
+    /**
      * @notice Get the pool address for a given pair of tokens and fee
      * @param tokenA The first token of the pair
      * @param tokenB The second token of the pair
@@ -292,7 +317,7 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
 
         uint160 sqrtPriceX96 = TickMath.getSqrtRatioAtTick(priceTick);
 
-        uint256 priceX96 = FullMath.mulDiv(sqrtPriceX96, sqrtPriceX96, FixedPoint96.Q96);
+        uint256 priceX96 = FullMath.mulDiv(sqrtPriceX96, sqrtPriceX96, Q96);
 
         uint256 tokenInDecimals = IERC20Metadata(tokenIn).decimals();
         uint256 tokenOutDecimals = IERC20Metadata(tokenOut).decimals();
@@ -301,12 +326,12 @@ contract UniswapV3Adapter is IUniswapV3Adapter {
         if (tokenIn < tokenOut) {
             // tokenIn is token0
             price = FullMath.mulDiv(
-                priceX96, PRICE_PRECISION * (10 ** tokenInDecimals), FixedPoint96.Q96 * (10 ** tokenOutDecimals)
+                priceX96, PRICE_PRECISION * (10 ** tokenInDecimals), Q96 * (10 ** tokenOutDecimals)
             );
         } else {
             // tokenIn is token1
             price = FullMath.mulDiv(
-                PRICE_PRECISION * (10 ** tokenInDecimals), FixedPoint96.Q96, priceX96 * (10 ** tokenOutDecimals)
+                PRICE_PRECISION * (10 ** tokenInDecimals), Q96, priceX96 * (10 ** tokenOutDecimals)
             );
         }
     }
